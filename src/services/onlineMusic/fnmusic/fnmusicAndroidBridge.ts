@@ -1,0 +1,58 @@
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import type { FnMusicBridgeStatus } from '../../../../sources/fnmusic/client/fnmusicTransport';
+
+// 桥操作与答复的形状（Folium 2.0 后 fnmusicTransport 里的这一对不再导出，安卓侧自己留一份）。
+type FnMusicBridgeParams = Record<string, unknown>;
+type FnMusicBridgeResult =
+    | { ok: true; data: unknown; status?: number }
+    | { ok: false; status?: number; error?: { code?: string | number; message?: string } };
+
+type FnMusicPlugin = {
+    api: (options: { operation: string; params?: Record<string, unknown> }) => Promise<FnMusicBridgeResult>;
+};
+
+const FnMusic = registerPlugin<FnMusicPlugin>('FoliaFnMusic');
+
+// src/services/fnmusicAndroidBridge.ts
+// 飞牛音乐在安卓没有 Electron 主进程：这里把同一套桥操作（getStatus / login / logout / request /
+// stream）转给原生插件 FoliaFnMusic。原生侧负责 Cookie、CORS、自签名证书与 127.0.0.1 回环代理，
+// 渲染层照旧只发操作，地址与 token 不进页面。
+
+// 回环代理的地址（封面要它）：登录后由 getStatus 给出，没配置时为 null。放在 window 上，
+// 让同步的封面地址生成不必反向依赖这个模块。
+const rememberOrigin = (value: string | null): void => {
+    if (typeof window === 'undefined') return;
+    (window as unknown as { __foliaFnMusicOrigin?: string | null }).__foliaFnMusicOrigin = value;
+};
+
+const applyStatus = (result: FnMusicBridgeResult): void => {
+    if (!result.ok) return;
+    const status = result.data as FnMusicBridgeStatus | null;
+    const proxyBase = (status as unknown as { proxyBase?: unknown } | null)?.proxyBase;
+    rememberOrigin(typeof proxyBase === 'string' && proxyBase ? proxyBase : null);
+};
+
+const call = async (operation: string, params: FnMusicBridgeParams): Promise<FnMusicBridgeResult> => {
+    const result = await FnMusic.api({ operation, params: params as Record<string, unknown> });
+    if (operation === 'getStatus' && result.ok) {
+        applyStatus(result);
+    }
+    // 首次登录时代理刚建好：补一次 getStatus 刷新封面要用的回环代理地址（ getStatus 也会在启动时预热）。
+    if (operation === 'login' && result.ok) {
+        void FnMusic.api({ operation: 'getStatus', params: {} })
+            .then(applyStatus)
+            .catch(() => { /* 状态刷新失败不影响登录结果 */ });
+    }
+    return result;
+};
+
+export const installFnMusicAndroidBridge = (): void => {
+    if (Capacitor.getPlatform() !== 'android' || typeof window === 'undefined') return;
+    const target = window as Window & { foliaFnMusicRequest?: typeof call };
+    if (typeof target.foliaFnMusicRequest === 'function') return;
+    target.foliaFnMusicRequest = call;
+    // 预热一次状态：已经登录过的机器不必等用户打开账号页才知道代理地址。
+    void call('getStatus', {}).catch(error => {
+        console.warn('[FnMusic] Android bridge status failed', error);
+    });
+};

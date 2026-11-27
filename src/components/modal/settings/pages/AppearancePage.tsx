@@ -1,0 +1,183 @@
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { useShallow } from 'zustand/react/shallow';
+import { ChosenSceneName } from '../../../scenes/settings/SceneWindow';
+import { getVisualizerModeLabel } from '../../../visualizer/registry';
+import { usePlayerChromeSettingsStore } from '../../../../stores/usePlayerChromeSettingsStore';
+import { openSettings } from '../../../../stores/useSettingsModalStore';
+import { useThemeSettingsStore } from '../../../../stores/useThemeSettingsStore';
+import { useVisualizerSettingsStore } from '../../../../stores/useVisualizerSettingsStore';
+import { Button, Group, Reveal, Row, Segmented, Toggle, Value, Select, option, type SettingsGroupDef, type SettingsOptionDef } from '../kit';
+import { settingsAnchorSubview } from '../../../../utils/settingsAnchorModel';
+import { useSettingsPage } from './settingsPageContext';
+import { useDesktopSettingsStore } from '../../../../stores/useDesktopSettingsStore';
+import { UI_ZOOM_STEPS, readUiZoomStep } from '../../../../utils/uiZoom';
+import { IS_ANDROID_WEBVIEW } from '../../../../utils/platform';
+
+// src/components/modal/settings/pages/AppearancePage.tsx
+// The 外观 page: which lyric animation the player uses, which scene (its window holds each scene's
+// settings and sound tracing), light or dark, the colour theme, and how a
+// song's own theme is made and applied. The AI provider those themes are generated with is not
+// here: it is one connection shared by every AI feature, on the AI service page (pages/AiServicePage).
+// The lyric animation workbench and the theme colour editor are the existing overlays; their rows
+// here only open them.
+
+const LYRICS: SettingsGroupDef = { id: 'lyricsRenderer', titleKey: 'options.lyricsRenderer' };
+const THEME: SettingsGroupDef = { id: 'themePresets', titleKey: 'options.settingsHeadingTheme' };
+const SONG_THEME: SettingsGroupDef = { id: 'songTheme', titleKey: 'options.settingsHeadingSongTheme' };
+// 界面缩放：桌面版在桌面页（DesktopPage）里；安卓壳没有桌面页，挡位在这里给（也是 #1264）。
+const UI_ZOOM: SettingsGroupDef = { id: 'uiZoomView', titleKey: 'options.settingsHeadingView', available: () => IS_ANDROID_WEBVIEW };
+
+const O = {
+    lyricsAnimation: option(LYRICS, 'lyricsAnimationAdjust', 'options.lyricsAnimationAdjust'),
+    scene: option(LYRICS, 'scene', 'ui.scene'),
+    // Not a row of its own: it lives in the scene window, so a search for it lands on the group with the scene row.
+    soundTracing: option(LYRICS, 'soundTracing', 'ui.soundTracing'),
+    daylight: option(THEME, 'daylightMode', 'options.daylightMode'),
+    preset: option(THEME, 'themePreset', 'options.themePresets'),
+    themePark: option(THEME, 'openThemePark', 'options.openThemePark'),
+    autoSwitch: option(SONG_THEME, 'autoSwitchSongTheme', 'options.autoSwitchSongTheme'),
+    autoGenerate: option(SONG_THEME, 'autoGenerateSongTheme', 'options.autoGenerateSongTheme'),
+    source: option(SONG_THEME, 'themeGenerationSource', 'options.themeGenerationSource'),
+    preferCustom: option(SONG_THEME, 'preferCustomTheme', 'options.preferCustomTheme'),
+    uiZoom: option(UI_ZOOM, 'uiZoom', 'options.uiZoom', { available: () => IS_ANDROID_WEBVIEW }),
+    uiZoomStep: option(UI_ZOOM, 'uiZoomStep', 'options.uiZoomStep', { available: () => IS_ANDROID_WEBVIEW }),
+
+};
+
+export const OPTIONS: SettingsOptionDef[] = Object.values(O);
+
+const UI_ZOOM_CHOICES = UI_ZOOM_STEPS.map(step => ({ value: String(step), label: `${step}%` }));
+
+type DaylightChoice = 'light' | 'dark' | 'system';
+
+const AppearancePage: React.FC = () => {
+    const { t } = useTranslation();
+    const { themeControls, onOpenVisPlayground, onOpenThemePark, onOpenSceneWindow } = useSettingsPage();
+    const { isDaylight, followSystemTheme, setDaylightPreference, setFollowSystemTheme } = useThemeSettingsStore(useShallow(state => ({
+        isDaylight: state.isDaylight,
+        followSystemTheme: state.followSystemTheme,
+        setDaylightPreference: state.setDaylightPreference,
+        setFollowSystemTheme: state.setFollowSystemTheme,
+    })));
+    const visualizerMode = useVisualizerSettingsStore(state => state.visualizerMode);
+    const randomEnabled = useVisualizerSettingsStore(state => state.randomVisualizerModePerSong);
+    const nativeBlurEnabled = usePlayerChromeSettingsStore(state => state.enablePlayerPageNativeBlur);
+    const desktop = useDesktopSettingsStore(useShallow(state => ({
+        uiZoomEnabled: state.uiZoomEnabled,
+        uiZoomStep: state.uiZoomStep,
+        setUiZoom: state.handleToggleUiZoom,
+        setUiZoomStep: state.handleSetUiZoomStep,
+    })));
+
+    return (
+        <>
+            <Group def={LYRICS} bare>
+                {nativeBlurEnabled && <Row notice={t('options.nativeBlurBackgroundNotice')} />}
+                <Row option={O.lyricsAnimation} hint={t('options.lyricsRendererDesc')} onClick={onOpenVisPlayground}>
+                    <Value>{randomEnabled ? t('ui.visualizerRandom') : getVisualizerModeLabel(visualizerMode, t)}</Value>
+                </Row>
+                <Row option={O.scene} tag={t('ui.sceneBeta')} onClick={onOpenSceneWindow}>
+                    <Value><ChosenSceneName /></Value>
+                </Row>
+            </Group>
+
+            <Group def={THEME}>
+                <Row option={O.daylight} note={t('options.followSystemThemeDesc')}>
+                    <Segmented<DaylightChoice>
+                        value={followSystemTheme ? 'system' : isDaylight ? 'light' : 'dark'}
+                        options={[
+                            { value: 'light', label: t('options.daylightModeLight') },
+                            { value: 'dark', label: t('options.daylightModeDark') },
+                            { value: 'system', label: t('options.daylightModeSystem') },
+                        ]}
+                        onChange={(choice) => {
+                            if (choice === 'system') {
+                                setFollowSystemTheme(true);
+                            } else {
+                                // A light or dark picked by hand also stops following the system.
+                                setDaylightPreference(choice === 'light');
+                            }
+                        }}
+                    />
+                </Row>
+                <Row option={O.preset}>
+                    <Segmented
+                        value={themeControls.bgMode}
+                        options={[
+                            { value: 'default', label: t('options.themePresetsDefault') },
+                            { value: 'custom', label: t('options.customTheme'), disabled: !themeControls.hasCustomTheme },
+                        ]}
+                        onChange={mode => (mode === 'custom' ? themeControls.onApplyCustomTheme() : themeControls.onApplyDefaultTheme())}
+                    />
+                </Row>
+                <Row option={O.themePark} onClick={onOpenThemePark} />
+            </Group>
+
+            <Group def={SONG_THEME}>
+                <Row option={O.autoSwitch} note={t('options.autoSwitchSongThemeDesc')}>
+                    <Toggle checked={themeControls.songThemeAutoSwitchEnabled} onChange={themeControls.onToggleSongThemeAutoSwitch} />
+                </Row>
+                <Reveal when={themeControls.songThemeAutoSwitchEnabled}>
+                    <Row
+                        sub
+                        option={O.autoGenerate}
+                        note={t(themeControls.themeGenerationSource === 'cover' ? 'options.autoGenerateSongThemeCoverDesc' : 'options.autoGenerateSongThemeDesc')}
+                    >
+                        <Toggle checked={themeControls.songThemeAutoGenerateEnabled} onChange={themeControls.onToggleSongThemeAutoGenerate} />
+                    </Row>
+                </Reveal>
+                <Row
+                    option={O.source}
+                    note={t(themeControls.themeGenerationSource === 'cover' ? 'options.themeGenerationSourceCoverDesc' : 'options.themeGenerationSourceAiDesc')}
+                >
+                    <Segmented
+                        value={themeControls.themeGenerationSource}
+                        options={[
+                            { value: 'ai', label: t('options.themeGenerationSourceAi'), disabled: themeControls.aiApiKeyStatus !== 'configured' },
+                            { value: 'cover', label: t('options.themeGenerationSourceCover') },
+                        ]}
+                        onChange={themeControls.onChangeThemeGenerationSource}
+                    />
+                </Row>
+                <Reveal when={themeControls.aiApiKeyStatus === 'missing'}>
+                    <Row sub notice={t('options.themeGenerationSourceAiUnavailable')}>
+                        <Button onClick={() => openSettings('options', settingsAnchorSubview('electronSettings'), null, 'electronSettings')}>
+                            {t('options.configureAiApiKey')}
+                        </Button>
+                    </Row>
+                </Reveal>
+                <Row option={O.preferCustom} hint={t('options.preferCustomThemeDesc')}>
+                    <Toggle
+                        checked={themeControls.isCustomThemePreferred}
+                        onChange={themeControls.onToggleCustomThemePreferred}
+                        disabled={!themeControls.hasCustomTheme}
+                    />
+                </Row>
+            </Group>
+
+            {IS_ANDROID_WEBVIEW && (
+                <Group def={UI_ZOOM}>
+                    <Row option={O.uiZoom} hint={t('options.uiZoomAndroidDesc')}>
+                        <Toggle checked={desktop.uiZoomEnabled} onChange={desktop.setUiZoom} />
+                    </Row>
+                    <Reveal when={desktop.uiZoomEnabled}>
+                        <Row sub option={O.uiZoomStep}>
+                            <Select
+                                value={String(desktop.uiZoomStep)}
+                                options={UI_ZOOM_CHOICES}
+                                onChange={(value) => {
+                                    const step = readUiZoomStep(value);
+                                    if (step) desktop.setUiZoomStep(step);
+                                }}
+                            />
+                        </Row>
+                    </Reveal>
+                </Group>
+            )}
+
+        </>
+    );
+};
+
+export default AppearancePage;
